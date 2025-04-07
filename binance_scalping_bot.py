@@ -66,9 +66,9 @@ MAX_DRAWDOWN_PERCENTUAL = 5   # Pausa se drawdown atingir este percentual
 TEMPO_PAUSA_APOS_PERDAS = 12  # Horas de pausa após sequência de perdas
 
 # Take profit ajustado para compensar taxas em capital pequeno
-ALVO_LUCRO_PERCENTUAL_1 = 0.6   # Aumentado de 0.4 para 0.6%
-ALVO_LUCRO_PERCENTUAL_2 = 0.9   # Aumentado de 0.7 para 0.9%
-ALVO_LUCRO_PERCENTUAL_3 = 1.5   # Aumentado de 1.2 para 1.5%
+ALVO_LUCRO_PERCENTUAL_1 = 0.4   # Reduzido para captura mais rápida
+ALVO_LUCRO_PERCENTUAL_2 = 0.7
+ALVO_LUCRO_PERCENTUAL_3 = 1.0
 
 # Gerenciamento de risco aprimorado
 CAPITAL_TOTAL = 164.47  # USDT
@@ -96,11 +96,11 @@ RSI_ZONA_OTIMA_MIN = 40
 RSI_ZONA_OTIMA_MAX = 60
 
 # Novos parâmetros de filtro
-VOLUME_MINIMO_PERCENTUAL = 115  # Aumentado para filtrar melhor (100% para 115%)
+VOLUME_MINIMO_PERCENTUAL = 150  # Aumentado para filtrar melhor (100% para 115%)
 VOLUME_PERIODO = 20
 INCLINACAO_MA_LONGA_MIN = 0.01  # Mínimo de inclinação para MA longa (filtro de tendência)
 ATR_PERIODO = 14
-ATR_MINIMO_OPERACAO = 0.12  # Aumentado para evitar mercados de baixa volatilidade
+ATR_MINIMO_OPERACAO = 0.25  # Aumentado para evitar mercados de baixa volatilidade
 MACD_FAST = 12
 MACD_SLOW = 26
 MACD_SIGNAL = 9
@@ -320,13 +320,13 @@ class BinanceScalpingBotMelhorado:
         # Critérios atendidos (proporção)
         proporcao_criterios = criterios_atendidos / criterios_total
         
-        # Determinar nível de confiança - LIMIARES MAIS REDUZIDOS
-        if pontuacao >= 4.0 and proporcao_criterios >= 0.6:  # Reduzido
+        # MUITO mais seletivo
+        if pontuacao >= 8.0 and proporcao_criterios >= 0.8:  # Super restritivo
             return "alta", 1.0  # 100% do capital alocado para o trade
-        elif pontuacao >= 2.0 and proporcao_criterios >= 0.4:  # Reduzido
+        elif pontuacao >= 6.5 and proporcao_criterios >= 0.7:  # Muito restritivo
             return "média", 0.7  # 70% do capital alocado
-        elif pontuacao >= 0.0 and proporcao_criterios >= 0.3:  # MUITO reduzido - qualquer pontuação positiva
-            return "baixa", 0.3  # 30% do capital alocado (reduzido para menor risco)
+        elif pontuacao >= 5.5 and proporcao_criterios >= 0.6:  # Restritivo
+            return "baixa", 0.4  # 40% do capital alocado
         else:
             return "insuficiente", 0  # Não entrar
     
@@ -2565,15 +2565,15 @@ class BinanceScalpingBotMelhorado:
         criterios_atendidos = 0
         criterios_total = 0
         
-        # Obter pesos configuráveis
-        peso_tendencia = self.config.get("peso_tendencia", 1.5)
-        peso_volume = self.config.get("peso_volume", 1.5)
-        peso_rsi = self.config.get("peso_rsi", 1.5)
-        peso_cruzamento = self.config.get("peso_cruzamento", 2.0)
-        peso_alinhamento = self.config.get("peso_alinhamento", 1.5)
-        peso_atr = self.config.get("peso_atr", 0.5)
-        peso_bollinger = self.config.get("peso_bollinger", 1.0)
-        peso_suporte_resistencia = self.config.get("peso_suporte_resistencia", 1.0)
+        # Substitua seus pesos atuais por:
+        self.config = {
+            "peso_tendencia": 0.5,     # Baseado na melhor combinação dos seus testes
+            "peso_volume": 2.1,        # Volume parece ter importância
+            "peso_rsi": 0.8,           # RSI com peso moderado
+            "peso_cruzamento": 1.2,    # Cruzamentos com peso moderado
+            "peso_alinhamento": 1.9,   # Alinhamento parece importante
+            "min_score_tecnico": 5.5   # Aumentando para ser mais seletivo
+        }
 
         # Verificar e aplicar ajustes para período de baixa liquidez
         modo_baixa_liquidez, criterios_noturnos = self.ajustar_criterios_noturnos()
@@ -2969,6 +2969,23 @@ class BinanceScalpingBotMelhorado:
         # Sistema flexível: permitir entrada mesmo com pontuação mais baixa se tiver critérios suficientes
         min_criterios_atendidos = 3  # Pelo menos 3 critérios importantes atendidos
         
+        # Adicione este trecho no método check_signal antes da determinação final de sinal_valido
+
+        # Verificar tendência geral do mercado
+        tendencia_baixa = False
+        if 'ma_longa_inclinacao' in df.columns:
+            inclinacao_ma_longa = float(df['ma_longa_inclinacao'].iloc[-1])
+            tendencia_baixa = inclinacao_ma_longa < -0.02  # Detecta tendência de baixa
+        elif len(df) > MA_LONGA + 10:
+            media_longa_atual = df[f'ma_{MA_LONGA}'].iloc[-1]
+            media_longa_anterior = df[f'ma_{MA_LONGA}'].iloc[-10]
+            tendencia_baixa = media_longa_atual < media_longa_anterior
+
+        # Se estiver em tendência de baixa, ser ainda mais restritivo
+        if tendencia_baixa and nivel_confianca != "alta":
+            sinal_valido = False
+            mensagem += "\n❌ Mercado em tendência de baixa - entrando apenas com sinais muito fortes"
+            
         # Verificar se temos um sinal válido baseado no nível de confiança e contexto
         # Determinar se o sinal é válido
         sinal_valido = False
@@ -2987,14 +3004,16 @@ class BinanceScalpingBotMelhorado:
             sinal_valido = pontuacao >= 0  # CAMADA DE RESGATE: apenas exige pontuação não negativa
             mensagem += "\n⚠️ Entrada baseada em critérios especiais (divergência/armadilha)"
 
-        # NOVA CAMADA DE RESGATE simplificada - qualquer pontuação positiva
-        elif pontuacao > 0:  # Qualquer pontuação positiva
-            sinal_valido = True
-            mensagem += "\n⚠️ CAMADA DE RESGATE: Entrada com pontuação positiva"
-            # Adicionar log de diagnóstico 
-            self.registrar_log(f"CAMADA RESGATE ATIVADA: Pontuação={pontuacao:.2f}, RSI={rsi_atual:.1f}, ATR%={atr_atual_percent:.2f}%")
-            sinal_valido = pontuacao >= -1.0  # Permite mesmo com pontuação ligeiramente negativa
-            mensagem += "\n⚠️ CAMADA DE RESGATE: Entrada baseada em padrão de alta probabilidade"
+        # Substitua completamente as linhas 2991-2996 com:
+        elif pontuacao > 4.0:  # Limiar muito mais alto
+            # Verificar se ATR é adequado
+            if atr_atual_percent >= ATR_MINIMO_OPERACAO * 1.2:  # 20% acima do mínimo
+                sinal_valido = True
+                mensagem += "\n⚠️ CAMADA DE RESGATE: Entrada com pontuação elevada e ATR adequado"
+                self.registrar_log(f"CAMADA RESGATE ATIVADA: Pontuação={pontuacao:.2f}, RSI={rsi_atual:.1f}, ATR%={atr_atual_percent:.2f}%")
+            else:
+                sinal_valido = False
+                mensagem += "\n❌ ATR insuficiente para ativação da camada de resgate"
         
         # Caso 2: Nível de confiança baixa mas em contexto favorável (RSI extremo ou suporte forte)
         elif nivel_confianca == "baixa" and (rsi_sobrevenda or proximo_suporte):
